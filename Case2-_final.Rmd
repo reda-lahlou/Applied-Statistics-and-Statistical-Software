@@ -1,0 +1,404 @@
+---
+title: "Case2 - Analysis"
+author: "Reda Lahlou"
+date: "17/01/2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+
+
+```{r,echo=FALSE}
+# Reading libraries
+library(car)
+library(ggplot2)
+library(data.table)
+library(kableExtra)
+library(knitr)
+Sys.setlocale("LC_TIME","English")
+```
+
+
+```{r,echo=FALSE}
+#Loading the data
+df<-read.table("merged_data.csv",sep=",",header = TRUE)
+```
+
+```{r,echo=FALSE}
+#Presenting the data
+str(df)
+
+```
+
+```{r,echo=FALSE}
+
+# Making a simple model that only contains date, ID and Temp
+df2 <- df
+
+```
+
+
+# Plotting the data
+```{r,echo=FALSE}
+# Creating a matrix with the unique IDs
+new_ID<-as.matrix(unique(df2$ID))
+
+# Allocating the new ID numbers to the data frame
+df2[,"new_ID"] <- NA
+for(i in 1:length(new_ID)){
+   x<-which(df2$ID==new_ID[i])
+   df2[x,]$new_ID<- rep_len(i,length.out = length(x))
+}
+
+
+df2$ID <- as.factor(df2$ID)
+df2$new_ID <- as.factor(df2$new_ID)
+
+# Plotting
+p<-ggplot(df2, aes(x=date, y=consumption,col=df2$new_ID)) + geom_point()
+par(mfrow=c(1,1))
+p + theme(axis.text.x = element_text(angle = 90))
+
+
+```
+
+```{r,echo=FALSE}
+lm0 <- lm(consumption~I(21-temp)*new_ID,data=df2)
+par(mfrow=c(2,2))
+plot(lm0)
+```
+
+
+The bigger a building is, the more it consumes. To account for that in the model, we should normalize the data by the size of each building. We can assume that the size of a building is proportionnal to its mean consumption. So we divide the consumptions of each building by its mean consumption. 
+
+```{r,echo=FALSE}
+ID <- unique(df2$ID)
+mins <- aggregate(df2$consumption,list(df2$ID),min)
+colnames(mins) <- c("ID","min")
+maxs <- aggregate(df2$consumption,list(df2$ID),max)
+colnames(maxs) <- c("ID","max")
+means <- aggregate(df2$consumption,list(df2$ID),mean)
+colnames(means) <- c("ID","mean")
+
+df2[,"normalized"] <- NA
+
+for (i in 1:length(ID)){
+   x <- which(df2$ID==ID[i])
+   for (j in 1:length(x)){
+      cons <- df2[x[j],"consumption"]
+      mean <- means[which(means$ID==ID[i]),"mean"]
+      df2[x[j],"normalized"] <- cons/mean
+   }
+}
+
+# Plotting
+p<-ggplot(df2, aes(x=date, y=normalized,col=df2$new_ID)) + geom_point()
+p + theme(axis.text.x = element_text(angle = 90))
+```
+
+
+# Make appropriate linear regression model(s)
+
+```{r,echo=FALSE}
+# Linear model for all buildings
+lm1 <-lm(normalized~I(21-temp)*ID,df2)
+
+# Plot of the model
+par(mfrow=c(2,2))
+plot(lm1)
+```
+
+Let's remove the zeros [+explanation why they don't make sense]
+
+```{r,echo=FALSE}
+#Removing zeros
+df3 <- df2[which(df2$consumption != 0),]
+
+# Plotting
+p<-ggplot(df3, aes(x=date, y=normalized,col=df3$new_ID)) + geom_point()
+p + theme(axis.text.x = element_text(angle = 90))
+
+```
+
+
+```{r,echo=FALSE}
+
+# Linear model for all buildings
+lm2 <-lm(normalized~I(21-temp)*new_ID,df3)
+
+# Plot of the model
+par(mfrow=c(2,2))
+plot(lm2)
+```
+
+We should in detail at the outliers, maybe plotting their consumption over the date (or the temperature).
+
+
+
+```{r,echo=FALSE}
+#Getting the slopes and the intercept of Q=f(21-T) for each building
+
+summary.lm2 <- summary(lm2)$coefficients
+v <- c(1,summary.lm2[1,1],summary.lm2[2,1])
+slopes.lm2 <- transpose(as.data.frame(matrix(v)))
+colnames(slopes.lm2) <- c("new_ID","intercept","slope")
+
+for (i in 2:83){
+   id <- i
+   rows <- grep(pattern = paste("\\b","new_ID",i,"\\b",sep = ""), x = rownames(summary.lm2)) 
+   coef <- summary.lm2[rows,]
+   slope <- summary.lm2[2,1]+coef[2,1]
+   inter <- summary.lm2[1,1]+coef[1,1]
+   v <- c(id,inter,slope)
+   X <- transpose(as.data.frame(matrix(v)))
+   colnames(X) <- colnames(slopes.lm2)
+   slopes.lm2 <- rbind(slopes.lm2,X) 
+}
+
+slopes.lm2[,2:3] <- sapply(slopes.lm2[,2:3], as.numeric)
+slopes.lm2[,1] <- as.factor(slopes.lm2[,1])
+```
+
+```{r,echo=FALSE}
+#Finding the worst and the best buildings (i.e the ones that have a slope that differs significantly from the one of the reference building)
+
+h <- hist(slopes.lm2$slope,breaks = 30,main="Histogram of slopes",xlab = "slope")
+x_n <- seq(min(slopes.lm2$slope),max(slopes.lm2$slope),length.out = 100)
+y_n <- dnorm(x_n,mean=mean(slopes.lm2$slope),sd = sd(slopes.lm2$slope))
+y_n <- y_n*diff(h$mids[1:2]) * length(slopes.lm2$slope)
+lines(x_n,y_n,col="red",lwd=3)
+legend(0,12,legend = "Normal distribution",col = "red",lwd = 2)
+```
+
+```{r,echo=FALSE}
+#Ranking the slopes
+slopes.lm2 <- slopes.lm2[order(slopes.lm2$slope),]
+
+#Finding the median
+median <- slopes.lm2[which(slopes.lm2$slope==median(slopes.lm2$slope)),]
+```
+
+```{r,echo=FALSE}
+# Calculating the confidence intervals for the slopes
+lm2s <- summary(lm2)
+
+#Building the A matrix to extract the slopes
+A <- cbind(matrix(rep(0,len=83),ncol = 83,nrow = 83),diag(83))
+A[,2] <- 1
+A[1,84] <- 0
+
+var_est <- A %*% lm2s$cov.unscaled %*% t(A) * lm2s$sigma^2
+s_errors <- data.frame(new_ID=unique(df2$new_ID),sd.error=sqrt(diag(var_est)))
+
+error <- as.data.frame(matrix(nrow = 83,ncol = 4))
+colnames(error) <- c("new_ID","slope","low","up")
+error$new_ID <- s_errors$new_ID
+
+for (i in 1:83){
+   id <- error$new_ID[i]
+   error$slope[i] <- slopes.lm2[which(slopes.lm2$new_ID==id),3]
+}
+
+for (i in 1:83){
+   e <- qt(0.975,df=9576)*s_errors[i,2]
+   error$low[i] <- error$slope[i]-e
+   error$up[i] <- error$slope[i]+e
+}
+
+```
+
+
+
+```{r,echo=FALSE}
+#Plotting the slopes and their confidence interval
+# First the upper limit
+pm <- matrix(error[slopes.lm2$new_ID,4])
+barplot(pm, beside = TRUE, border = "white", col = 2:5,names.arg = as.character(slopes.lm2$new_ID),cex.names = 0.6,las=2,xlab = "new_ID",ylab = "slope")
+# The expected value
+pm <- matrix(error[slopes.lm2$new_ID,2])
+barplot(pm, beside = TRUE, col = 2:5, add = TRUE, border = "white", axisnames = FALSE,cex.names = 0.6,las=2)
+# The lower limit with write fill
+pm <- matrix(error[slopes.lm2$new_ID,3])
+barplot(pm, beside = TRUE, add = TRUE, col = "white", border = "white", axisnames = FALSE,cex.names = 0.6,las=2)
+
+abline(h=error$low[which(error$new_ID==median$new_ID[1])])
+abline(h=error$up[which(error$new_ID==median$new_ID[1])])
+```
+
+```{r,echo=FALSE}
+#Detecting the worst and the best buildings
+median_id <- as.numeric(median$new_ID[1])
+low_bound <- error[median_id,3]
+up_bound <- error[median_id,4]
+worst <- c()
+best <- c()
+
+for (i in 1:83){
+   low <- error[i,3]
+   up <- error[i,4]
+   if (up < low_bound){
+      best <- c(best,i)
+   }
+   if (low > up_bound){
+      worst <- c(worst,i)
+   }
+}
+
+
+df_worst <- as.data.frame(matrix(new_ID[worst],nrow=length(worst),ncol=1))
+colnames(df_worst) <- "ID of the worst buildings"
+
+df_best <- as.data.frame(matrix(new_ID[best],nrow=length(best),ncol=1))
+colnames(df_best) <- "ID of the best buildings"
+```
+
+```{r,echo=FALSE}
+#Influence of the type of building
+df_type <- read.table("HTK.csv",sep=";",header = TRUE)
+```
+
+```{r,echo=FALSE}
+#Getting the data for the buildings from the excel file
+df4 <- data.frame(ID=new_ID,type=NA,perf=NA)
+
+df4 <- df4[which(df4$ID %in% df_type$Målernr),]
+df4$type <- df_type[which(df4$ID %in% df_type$Målernr),"Anvendelse"]
+
+df4$perf <- "n" 
+df4$perf[which(df4$ID %in% df_worst$`ID of the worst buildings`)] <- "w"
+df4$perf[which(df4$ID %in% df_best$`ID of the best buildings`)] <- "b"
+```
+
+```{r,echo=FALSE}
+types <- df4$type
+split <- strsplit(as.character(types),' ') 
+new_types <- c()
+for (i in 1:length(types)){
+   new_types[i] <- split[[i]][1]
+}
+df4$new_type <- new_types
+```
+
+```{r,echo=FALSE}
+#making further grouping of the types
+other <- c("013a","205","535")
+institution <- c("511","514","514a","516","521","525","031","032","482","559","301","305","375","364","350")
+living <- c("530","533","534","550","011","013")
+
+df4$group <- NULL
+df4[which(df4$new_type %in% other),"group"] <- "other"
+df4[which(df4$new_type %in% institution),"group"] <- "institution"
+df4[which(df4$new_type %in% living),"group"] <- "living"
+
+```
+
+
+```{r,echo=FALSE}
+un <- unique(df4$new_type)
+tab <- matrix(ncol = 3,nrow = length(un),dimnames = list(un,c("n","b","w")))
+
+for (i in 1:length(un)){
+   t <- un[i]
+   tab[i,"n"] <- length(which(df4$new_type==t & df4$perf=="n"))
+   tab[i,"w"] <- length(which(df4$new_type==t & df4$perf=="w"))
+   tab[i,"b"] <- length(which(df4$new_type==t & df4$perf=="b"))
+}
+```
+
+```{r,echo=FALSE}
+un_gr <- unique(df4$group)
+tab_gr <- matrix(ncol = 3,nrow = length(un_gr),dimnames = list(un_gr,c("normal","best","worst")))
+
+for (i in 1:length(un_gr)){
+   t <- un_gr[i]
+   tab_gr[i,"normal"] <- length(which(df4$group==t & df4$perf=="n"))
+   tab_gr[i,"worst"] <- length(which(df4$group==t & df4$perf=="w"))
+   tab_gr[i,"best"] <- length(which(df4$group==t & df4$perf=="b"))
+}
+```
+
+
+```{r,echo=FALSE}
+mosaicplot(t(tab),shade = 2:3)
+```
+
+```{r,echo=FALSE}
+mosaicplot(t(tab_gr),shade = 2:3)
+```
+
+```{r,echo=FALSE}
+fisher.test(tab)
+```
+
+
+
+# Removing zeros
+```{r,echo=FALSE}
+df4 <- df2[which(df2$consumption != 0),]
+```
+
+# Changing the dates and define them as weekday, giving us 7 levels
+```{r,echo=FALSE}
+#Adding weekdays as a categorical variable
+df5 <- df4
+df5$weekday <- weekdays(as.POSIXct(df4$date))
+df5_without_ref <- df5[which(df5$new_ID != 0),]
+days <- unique(df5$date)
+
+
+```
+
+# Defining the final data set for model selection
+```{r,echo=FALSE}
+d<-df5[,!names(df5) %in% c("date","consumption","fog","rain","dew_pt")]
+d$weekday<-as.factor(d$weekday)
+d$ID<-as.factor(d$ID)
+
+```
+
+# Defining the final data set for model selection
+```{r,echo=FALSE}
+lmlow<-lm(normalized~I(21-temp)*ID,data = d)
+lmhigh<-lm(normalized~(I(21-temp)+ID+hum+cond+wind_spd+dir+vis+pressure+weekday)^2,data = d)
+
+```
+
+# Defining the final data set for model selection
+```{r,echo=FALSE}
+lmFinal <- step(lmlow,scope=list(lower=lmlow,upper=lmhigh),k = log(nrow(d)))
+```
+
+```{r,echo=FALSE}
+library(car)
+Anova(lmFinal)
+```
+```{r,echo=FALSE}
+summary.lm(aov(lmFinal))
+
+```
+
+# Extracting the Multiple R-squared
+```{r,echo=FALSE}
+summary.lm(aov(lmlow))
+```
+
+
+
+# Plotting diagnostics
+```{r,echo=FALSE}
+par(mfrow=c(2,2))
+plot(lmFinal)
+```
+
+
+```{r,echo=FALSE}
+summary(aov(lmlow,lmFinal))
+```
+
+
+
+
+
+
+
